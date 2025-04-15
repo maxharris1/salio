@@ -4,16 +4,19 @@ export class Sky {
   constructor({ scene }) {
     this.scene = scene;
     
+    // Sky dome radius - will be updated based on view distance
+    this.skyRadius = 40;
+    
     // Sky dome
     this.sky = new THREE.Mesh(
-      new THREE.SphereGeometry(40, 32, 32),
+      new THREE.SphereGeometry(this.skyRadius, 32, 32),
       new THREE.ShaderMaterial({
         vertexShader: this.vertexShader(),
         fragmentShader: this.fragmentShader(),
         side: THREE.BackSide,
         uniforms: {
           uTopColor: { value: new THREE.Color(0x0077ff) },
-          uBottomColor: { value: new THREE.Color(0xffffff) },
+          uBottomColor: { value: new THREE.Color(0x77AAFF) }, // Brighter blue at horizon for extreme blending
           uTopExponent: { value: 0.6 },
           uBottomExponent: { value: 0.1 },
           uOffset: { value: 0.0 },
@@ -34,11 +37,11 @@ export class Sky {
     this.sunLight.shadow.mapSize.width = 2048;
     this.sunLight.shadow.mapSize.height = 2048;
     this.sunLight.shadow.camera.near = 0.1;
-    this.sunLight.shadow.camera.far = 100;
-    this.sunLight.shadow.camera.left = -10;
-    this.sunLight.shadow.camera.right = 10;
-    this.sunLight.shadow.camera.top = 10;
-    this.sunLight.shadow.camera.bottom = -10;
+    this.sunLight.shadow.camera.far = this.skyRadius * 1.5;
+    this.sunLight.shadow.camera.left = -this.skyRadius / 4;
+    this.sunLight.shadow.camera.right = this.skyRadius / 4;
+    this.sunLight.shadow.camera.top = this.skyRadius / 4;
+    this.sunLight.shadow.camera.bottom = -this.skyRadius / 4;
     this.sunLight.shadow.bias = -0.001;
     this.scene.add(this.sunLight);
     
@@ -66,7 +69,7 @@ export class Sky {
     });
     
     // Create the cube camera
-    this.cubeCamera = new THREE.CubeCamera(0.1, 100, this.cubeRenderTarget);
+    this.cubeCamera = new THREE.CubeCamera(0.1, this.skyRadius * 1.5, this.cubeRenderTarget);
     
     // Position it at water level
     this.cubeCamera.position.set(0, 0, 0);
@@ -163,7 +166,7 @@ export class Sky {
     });
   }
   
-  update(time) {
+  update(time, forceUpdate = false) {
     // Update time uniform
     this.sky.material.uniforms.uTime.value = time;
     
@@ -178,40 +181,60 @@ export class Sky {
     sunPosition.z = 0.0;
     
     this.sky.material.uniforms.uSunPosition.value = sunPosition;
-    this.sunLight.position.copy(sunPosition.clone().multiplyScalar(20));
+    this.sunLight.position.copy(sunPosition.clone().multiplyScalar(this.skyRadius * 0.9));
     
-    // Update colors based on time of day
+    // Update colors based on time of day - EXTREMELY EXAGGERATED for testing
     if (dayTime < 0.25) { // Night to sunrise
       const t = dayTime / 0.25;
-      this.sky.material.uniforms.uTopColor.value.setRGB(t * 0.1, t * 0.2, 0.5 - t * 0.2);
-      this.sky.material.uniforms.uBottomColor.value.setRGB(t * 0.9, t * 0.6, t * 0.4);
-      this.sunLight.intensity = t * 1.5;
-      this.sunLight.color.setRGB(1, 0.8 + t * 0.2, 0.7 + t * 0.3);
-      this.ambientLight.intensity = 0.2 + t * 0.1;
+      this.sky.material.uniforms.uTopColor.value.setRGB(t * 0.2, t * 0.2, 0.6);
+      // EXTREME orange/pink horizon at sunrise
+      this.sky.material.uniforms.uBottomColor.value.setRGB(
+        Math.min(1.0, t * 2.0 + 0.3), // Intense red
+        t * 0.6, 
+        t * 0.3
+      );
+      this.sunLight.intensity = t * 2.0; // Brighter
+      this.sunLight.color.setRGB(1, 0.7 + t * 0.3, 0.6 + t * 0.3);
+      this.ambientLight.intensity = 0.3 + t * 0.2;
     } 
     else if (dayTime < 0.5) { // Sunrise to noon
       const t = (dayTime - 0.25) / 0.25;
-      this.sky.material.uniforms.uTopColor.value.setRGB(0.1 + t * 0.1, 0.2 + t * 0.4, 0.3 + t * 0.5);
-      this.sky.material.uniforms.uBottomColor.value.setRGB(0.9, 0.6 + t * 0.4, 0.4 + t * 0.6);
-      this.sunLight.intensity = 1.5;
+      this.sky.material.uniforms.uTopColor.value.setRGB(0.2 + t * 0.2, 0.2 + t * 0.6, 0.6 + t * 0.4);
+      // EXTREME transition from orange/pink to blue
+      this.sky.material.uniforms.uBottomColor.value.setRGB(
+        1.3 - t * 1.0, // Very dramatic red reduction
+        0.6 + t * 0.4, // Increase green
+        0.3 + t * 0.7  // Increase blue
+      );
+      this.sunLight.intensity = 2.0;
       this.sunLight.color.setRGB(1, 1, 1);
-      this.ambientLight.intensity = 0.3;
+      this.ambientLight.intensity = 0.5;
     }
     else if (dayTime < 0.75) { // Noon to sunset
       const t = (dayTime - 0.5) / 0.25;
-      this.sky.material.uniforms.uTopColor.value.setRGB(0.2 - t * 0.1, 0.6 - t * 0.4, 0.8 - t * 0.3);
-      this.sky.material.uniforms.uBottomColor.value.setRGB(0.9, 1.0 - t * 0.4, 1.0 - t * 0.6);
-      this.sunLight.intensity = 1.5 - t * 0.5;
-      this.sunLight.color.setRGB(1, 1 - t * 0.2, 1 - t * 0.3);
-      this.ambientLight.intensity = 0.3 - t * 0.1;
+      this.sky.material.uniforms.uTopColor.value.setRGB(0.4 - t * 0.2, 0.8 - t * 0.6, 1.0 - t * 0.4);
+      // EXTREME transition from blue to orange/pink
+      this.sky.material.uniforms.uBottomColor.value.setRGB(
+        0.3 + t * 1.0, // Dramatic red increase
+        1.0 - t * 0.4, // Decrease green
+        1.0 - t * 0.7  // Decrease blue
+      );
+      this.sunLight.intensity = 2.0 - t * 1.0;
+      this.sunLight.color.setRGB(1, 1 - t * 0.3, 1 - t * 0.4);
+      this.ambientLight.intensity = 0.5 - t * 0.2;
     }
     else { // Sunset to night
       const t = (dayTime - 0.75) / 0.25;
-      this.sky.material.uniforms.uTopColor.value.setRGB(0.1 - t * 0.1, 0.2 - t * 0.2, 0.5);
-      this.sky.material.uniforms.uBottomColor.value.setRGB(0.9 - t * 0.9, 0.6 - t * 0.6, 0.4 - t * 0.4);
+      this.sky.material.uniforms.uTopColor.value.setRGB(0.2 - t * 0.2, 0.2 - t * 0.2, 0.6);
+      // EXTREME sunset to night transition at horizon
+      this.sky.material.uniforms.uBottomColor.value.setRGB(
+        1.3 - t * 1.2, // Dramatic red reduction
+        0.6 - t * 0.6, // Reduce green
+        0.3          // Maintain some blue
+      );
       this.sunLight.intensity = 1.0 - t * 1.0;
-      this.sunLight.color.setRGB(1, 0.8 - t * 0.8, 0.7 - t * 0.7);
-      this.ambientLight.intensity = 0.2 - t * 0.1;
+      this.sunLight.color.setRGB(1, 0.7 - t * 0.7, 0.6 - t * 0.6);
+      this.ambientLight.intensity = 0.3 - t * 0.2;
     }
     
     // Update clouds if they exist
@@ -315,5 +338,52 @@ export class Sky {
         gl_FragColor = vec4(skyColor, 1.0);
       }
     `;
+  }
+
+  // New method to update the sky radius based on view distance and chunk size
+  updateSkyRadius(viewDistance, chunkSize) {
+    // Calculate the radius based on the view distance in world units
+    // Use the diagonal distance of the view area plus a small buffer
+    const viewAreaRadius = viewDistance * chunkSize * Math.SQRT2;
+    const newRadius = viewAreaRadius * 1.2; // Add 20% buffer
+    
+    if (newRadius !== this.skyRadius) {
+      this.skyRadius = newRadius;
+      
+      // Update the sky dome geometry
+      this.sky.geometry.dispose();
+      this.sky.geometry = new THREE.SphereGeometry(this.skyRadius, 32, 32);
+      
+      // Update the cube camera far value
+      if (this.cubeCamera) {
+        this.scene.remove(this.cubeCamera);
+        this.cubeCamera = new THREE.CubeCamera(0.1, this.skyRadius * 1.5, this.cubeRenderTarget);
+        this.cubeCamera.position.set(0, 0, 0);
+        this.scene.add(this.cubeCamera);
+      }
+      
+      // Update shadow camera frustum
+      this.sunLight.shadow.camera.far = this.skyRadius * 1.5;
+      this.sunLight.shadow.camera.left = -this.skyRadius / 4;
+      this.sunLight.shadow.camera.right = this.skyRadius / 4;
+      this.sunLight.shadow.camera.top = this.skyRadius / 4;
+      this.sunLight.shadow.camera.bottom = -this.skyRadius / 4;
+      this.sunLight.shadow.camera.updateProjectionMatrix();
+      
+      // Update sun light position to maintain proper distance relative to sky size
+      const currentDayTime = this.sky.material.uniforms.uDayTime.value;
+      const theta = Math.PI * (currentDayTime * 2 - 0.5);
+      const sunPosition = new THREE.Vector3(
+        Math.cos(theta),
+        Math.sin(theta),
+        0.0
+      );
+      this.sunLight.position.copy(sunPosition.clone().multiplyScalar(this.skyRadius * 0.9));
+      
+      // Force full update of sky colors and sun position
+      this.update(0, true);
+      
+      console.log(`Sky radius updated to ${this.skyRadius.toFixed(2)} units`);
+    }
   }
 } 

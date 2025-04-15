@@ -22,7 +22,7 @@ export class Ground extends THREE.Mesh {
 
     this.geometry = new THREE.PlaneGeometry(2, 2);
     this.rotation.x = -Math.PI * 0.5;
-    this.position.y = -0.12;
+    this.position.y = -0.3;
   }
 
   update(time) {

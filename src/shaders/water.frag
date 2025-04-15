@@ -37,6 +37,10 @@ void main() {
   // Calculate transition factors using smoothstep
   float peakFactor = smoothstep(uPeakThreshold - uPeakTransition, uPeakThreshold + uPeakTransition, elevation);
   float troughFactor = smoothstep(uTroughThreshold - uTroughTransition, uTroughThreshold + uTroughTransition, elevation);
+  
+  // Enhanced depth effect based on view angle
+  float depthFactor = 1.0 - clamp(dot(viewDirection, vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
+  troughFactor = mix(troughFactor, troughFactor * 0.85, depthFactor * 0.4);
 
   // Mix between trough and surface colors based on trough transition
   vec3 mixedColor1 = mix(uTroughColor, uSurfaceColor, troughFactor);

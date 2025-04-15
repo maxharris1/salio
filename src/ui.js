@@ -1,7 +1,7 @@
 import { Pane } from 'tweakpane';
 import * as THREE from 'three';
 
-export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConfig }) {
+export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConfig, boat }) {
   const pane = new Pane();
 
   // Time of day folder
@@ -28,8 +28,124 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
     min: 0, max: 3, step: 0.1, label: 'Sun Intensity'
   });
 
+  // Boat controls folder
+  if (boat) {
+    const boatFolder = pane.addFolder({ title: 'Boat Controls' });
+    
+    // Steering/Rudder control
+    const steeringParams = { rudderAngle: 0 };
+    boatFolder.addBinding(steeringParams, 'rudderAngle', {
+      min: -45, max: 45, step: 1, label: 'Steering'
+    }).on('change', ({ value }) => {
+      boat.setRudderAngle(value); // This updates both rudder and helm wheel
+    });
+    
+    // Boom angle control
+    const boomParams = { angle: 0 };
+    boatFolder.addBinding(boomParams, 'angle', {
+      min: -45, max: 45, step: 1, label: 'Boom Angle'
+    }).on('change', ({ value }) => {
+      boat.setBoomAngle(value); // This also rotates the boom winch
+    });
+    
+    // Sail height control
+    const sailParams = { height: 1.0 };
+    boatFolder.addBinding(sailParams, 'height', {
+      min: 0, max: 1, step: 0.01, label: 'Sail Height'
+    }).on('change', ({ value }) => {
+      boat.setSailHeight(value); // This also rotates the sail winch
+    });
+    
+    // Position controls
+    const positionParams = { 
+      x: boat.boatGroup.position.x,
+      z: boat.boatGroup.position.z
+    };
+    
+    // Update position params when boat moves
+    const updatePositionParams = () => {
+      positionParams.x = boat.boatGroup.position.x;
+      positionParams.z = boat.boatGroup.position.z;
+    };
+    
+    boatFolder.addBinding(positionParams, 'x', {
+      min: -50, max: 50, step: 1, label: 'Position X'
+    }).on('change', ({ value }) => {
+      boat.setPosition(value, boat.boatGroup.position.y, positionParams.z);
+    });
+    
+    boatFolder.addBinding(positionParams, 'z', {
+      min: -50, max: 50, step: 1, label: 'Position Z'
+    }).on('change', ({ value }) => {
+      boat.setPosition(positionParams.x, boat.boatGroup.position.y, value);
+    });
+    
+    // Reset boat position button
+    boatFolder.addButton({ title: 'Reset Position' }).on('click', () => {
+      boat.setPosition(5, 2, 5);
+      // Reset controls to default values
+      steeringParams.rudderAngle = 0;
+      boomParams.angle = 0;
+      sailParams.height = 1.0;
+      // Update UI and boat
+      boat.setRudderAngle(0);
+      boat.setBoomAngle(0);
+      boat.setSailHeight(1.0);
+      updatePositionParams();
+    });
+    
+    // Apply wind force button
+    boatFolder.addButton({ title: 'Apply Wind Force' }).on('click', () => {
+      // Apply a force in the -z direction (simulate wind)
+      boat.applyForce(new THREE.Vector3(0, 0, -1000));
+    });
+  }
+
   // World settings folder
   const worldFolder = pane.addFolder({ title: 'World' });
+  
+  // Add fog control
+  if (worldManager.scene.fog) {
+    worldFolder.addBinding(worldManager.scene.fog, 'density', {
+      min: 0.002, max: 0.3, step: 0.01, label: 'Fog Density'
+    }).on('change', ({ value }) => {
+      console.log(`Fog density changed to ${value}`);
+    });
+    
+    // Add a button to test extreme fog density
+    worldFolder.addButton({ title: 'EXTREME FOG (10X)' }).on('click', () => {
+      worldManager.scene.fog.density = 0.3; // Very extreme fog
+      console.log("Setting EXTREME fog density: 0.3");
+    });
+    
+    // Add a button to restore normal fog density
+    worldFolder.addButton({ title: 'Normal Fog' }).on('click', () => {
+      worldManager.scene.fog.density = 0.01; // Normal fog
+      console.log("Setting normal fog density: 0.01");
+    });
+    
+    // Add a button to log fog status (for debugging)
+    worldFolder.addButton({ title: 'Check Fog Status' }).on('click', () => {
+      console.log('Current fog status:', 
+        worldManager.scene.fog, 
+        'Fog Color:', 
+        worldManager.scene.fog.color.r.toFixed(2),
+        worldManager.scene.fog.color.g.toFixed(2), 
+        worldManager.scene.fog.color.b.toFixed(2)
+      );
+      
+      // Also log the distant water plane status
+      if (worldManager.distantWaterPlane) {
+        console.log('Distant water plane:', 
+          worldManager.distantWaterPlane,
+          'Material:', 
+          worldManager.distantWaterPlane.material
+        );
+      } else {
+        console.log('No distant water plane found');
+      }
+    });
+  }
   
   worldFolder.addBinding(worldConfig, 'chunkSize', { 
     min: 1, max: 10, step: 0.5, label: 'Chunk Size' 
@@ -38,12 +154,23 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
     console.log('Chunk size changed. Refresh to apply changes.');
   });
   
+  // Add Ocean Depth control
+  const depthParams = { depth: worldManager.oceanFloorDepth };
+  worldFolder.addBinding(depthParams, 'depth', {
+    min: -20, max: 0, step: 0.1, label: 'Ocean Depth'
+  }).on('change', ({ value }) => {
+    worldManager.setOceanFloorDepth(value);
+    // Refresh the binding to reflect the actual value set
+    pane.refresh(); 
+  });
+  
   worldFolder.addBinding(worldConfig, 'viewDistance', { 
     min: 1, max: 20, step: 1, label: 'View Distance' 
   }).on('change', ({ value }) => {
-    worldManager.viewDistance = value;
-    // Force update of active chunks
-    worldManager.lastCameraChunkPosition.x = Infinity;
+    // Use the new safe setter method instead of direct assignment
+    worldManager.setViewDistance(value);
+    // Update the worldConfig value to match what was actually set
+    worldConfig.viewDistance = worldManager.viewDistance;
   });
   
   worldFolder.addBinding(worldConfig, 'resolution', { 
@@ -140,5 +267,18 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
   debugFolder.addBinding(debugParams, 'showChunkBorders').on('change', ({ value }) => {
     console.log(`Debug chunk borders: ${value ? 'enabled' : 'disabled'}`);
     // Implementation of debug visualization would go here
+  });
+
+  // Add a button to toggle fog visualization tools
+  debugFolder.addButton({ title: 'Toggle Fog Tools' }).on('click', () => {
+    // Dispatch a custom event that the Stats class listens for
+    document.dispatchEvent(new Event('toggle-fog-visualization'));
+    console.log('Toggled fog visualization tools');
+  });
+
+  // Add button to show/hide the stats panel
+  debugFolder.addButton({ title: 'Toggle Stats Display' }).on('click', () => {
+    // Simulate pressing the backtick key to toggle stats
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '`' }));
   });
 }
