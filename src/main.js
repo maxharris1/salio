@@ -16,6 +16,9 @@ let ENABLE_DYNAMIC_FOG = false;   // Will enable camera-height based fog adjustm
 // Animation
 const clock = new THREE.Clock();
 
+// Track last log time to avoid spamming console
+let lastLogTime = -1;
+
 // Scene setup
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 2000);
@@ -75,8 +78,151 @@ const physicsWorld = new CANNON.World({
   gravity: new CANNON.Vec3(0, -9.82, 0)
 });
 
+// Set solver iterations for more accurate physics
+physicsWorld.solver.iterations = 10;
+physicsWorld.solver.tolerance = 0.001;
+
+// Configure physics timestep - use fixed timestep for stability
+physicsWorld.fixedTimeStep = 1.0 / 60.0; // 60 Hz
+physicsWorld.allowSleep = false; // Don't allow bodies to sleep
+
+// Create ground plane
+const groundShape = new CANNON.Plane();
+const groundBody = new CANNON.Body({
+  mass: 0, // Static body
+  shape: groundShape,
+  material: new CANNON.Material('groundMaterial')
+});
+
+// Rotate the plane to be horizontal (facing up)
+groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+
+// Set ground position to ocean floor depth
+// Default to -3 if worldManager.oceanFloorDepth is not available
+const oceanFloorDepth = (worldManager && typeof worldManager.oceanFloorDepth === 'number') 
+  ? worldManager.oceanFloorDepth 
+  : -3;
+groundBody.position.set(0, oceanFloorDepth, 0);
+
+// Add ground to physics world
+physicsWorld.addBody(groundBody);
+
+// Log ground plane creation
+console.log('Ground plane created at y =', oceanFloorDepth);
+
+// Create contact material for boat-ground interaction
+const boatGroundContactMaterial = new CANNON.ContactMaterial(
+  new CANNON.Material('boatMaterial'),
+  groundBody.material,
+  {
+    friction: 0.3,
+    restitution: 0.3 // Slightly bouncy
+  }
+);
+physicsWorld.addContactMaterial(boatGroundContactMaterial);
+
+// Log physics world setup
+console.log('Physics world initialized with:', {
+  gravity: physicsWorld.gravity,
+  iterations: physicsWorld.solver.iterations,
+  groundY: groundBody.position.y
+});
+
+// --- Add World PreStep Listener for Buoyancy ---
+physicsWorld.addEventListener('preStep', () => {
+  if (!boat || !boat.body) return; // Exit if boat doesn't exist
+  
+  // Get necessary properties from the boat instance
+  const body = boat.body;
+  const position = body.position;
+  const hullHeight = boat.hullHeight; // Assuming hullHeight is accessible
+  const mass = boat.mass;
+  const waterDensity = boat.waterDensity;
+  const gravityMagnitude = Math.abs(physicsWorld.gravity.y);
+  
+  // Get water height at boat position using waveUtils
+  const waterHeight = waveUtils.getWaveHeight(position.x, position.z);
+  
+  // Calculate boat bottom
+  const bottomY = position.y - hullHeight / 2;
+  
+  // Check if boat bottom is below water
+  if (bottomY <= waterHeight) {
+    const submergedRatio = Math.min(1, (waterHeight - bottomY) / hullHeight);
+    const floatForceMagnitude = mass * gravityMagnitude * 1.5 * submergedRatio;
+    const floatForce = new CANNON.Vec3(0, floatForceMagnitude, 0);
+    body.applyForce(floatForce, new CANNON.Vec3()); // Apply at center
+
+    // Apply damping
+    const dampingFactor = 0.1 * submergedRatio;
+    const dampingForce = new CANNON.Vec3(
+      -body.velocity.x * dampingFactor,
+      0, 
+      -body.velocity.z * dampingFactor
+    );
+    body.applyForce(dampingForce, new CANNON.Vec3());
+    
+    // Apply stabilizing torque
+    const currentTilt = new CANNON.Vec3(body.quaternion.x, 0, body.quaternion.z);
+    const stabilizingTorque = currentTilt.scale(-5000 * submergedRatio);
+    body.applyTorque(stabilizingTorque);
+
+    // Apply Rudder Force based on current angle and speed
+    boat.applyRudderForce();
+
+    // Apply Thrust Force based on UI slider
+    const thrustMagnitude = boat.currentThrust || 0;
+    if (thrustMagnitude > 0) {
+      const localForward = new CANNON.Vec3(0, 0, 1); // Boat's local forward Z-axis
+      const worldForward = body.quaternion.vmult(localForward);
+      const thrustForce = worldForward.scale(thrustMagnitude);
+      body.applyForce(thrustForce, new CANNON.Vec3()); // Apply at center of mass
+    }
+
+    // Occasional logging
+    if (Math.random() < 0.01) {
+      console.log('World preStep Buoyancy active:', { 
+        boatY: position.y.toFixed(2),
+        waterHeight: waterHeight.toFixed(2),
+        submergedRatio: submergedRatio.toFixed(2),
+        floatForce: floatForceMagnitude.toFixed(2)
+      });
+    }
+  }
+});
+console.log("Added buoyancy logic to world preStep event.");
+// --- End World PreStep Listener ---
+
 // Create wave height calculator using the water material
 const waveUtils = new WaveUtils(worldManager.getWaterMaterial());
+
+// Debug helper for water level visualization
+let waterLevelMarker = null;
+let buoyancyIndicator = null;
+
+function createDebugHelpers() {
+  // Create water height marker (red sphere)
+  const markerGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+  const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  waterLevelMarker = new THREE.Mesh(markerGeometry, markerMaterial);
+  scene.add(waterLevelMarker);
+  
+  // Create buoyancy indicator (shows when boat is in water)
+  const indicatorGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+  const indicatorMaterial = new THREE.MeshBasicMaterial({ 
+    color: 0x00ff00,
+    transparent: true,
+    opacity: 0.7
+  });
+  buoyancyIndicator = new THREE.Mesh(indicatorGeometry, indicatorMaterial);
+  buoyancyIndicator.visible = false; // Hide initially
+  scene.add(buoyancyIndicator);
+  
+  console.log("Created debug visualization helpers");
+}
+
+// Create the debug helpers
+createDebugHelpers();
 
 // Create a boat with physics
 let boat = null;
@@ -88,12 +234,25 @@ function createBoat() {
     getWaveHeight: (x, z) => waveUtils.getWaveHeight(x, z)
   });
   
-  // Position the boat at origin for camera to see it
-  boat.setPosition(0, 2, 0);
+  // Get the water height at the starting position
+  const startX = 0;
+  const startZ = 0;
+  const waterHeight = waveUtils.getWaveHeight(startX, startZ);
   
-  // Move camera to look at the boat from behind
-  camera.position.set(0, 3, -10);
-  camera.lookAt(0, 1, 0);
+  // Position the boat well above the water surface so we can observe the physics
+  const startHeight = waterHeight + 8.0; // Start higher (8 units above water)
+  boat.setPosition(startX, startHeight, startZ);
+  
+  // Log boat creation and starting position
+  console.log('Boat created and positioned:', {
+    position: { x: startX, y: startHeight, z: startZ },
+    waterHeight: waterHeight,
+    heightAboveWater: startHeight - waterHeight
+  });
+  
+  // Move camera to look at the boat from a better angle
+  camera.position.set(-5, 6, -10);
+  camera.lookAt(0, 2, 0);
   
   // Return a reference to the boat for UI controls
   return boat;
@@ -206,12 +365,71 @@ function animate() {
   const elapsedTime = clock.getElapsedTime();
   const deltaTime = clock.getDelta(); // For physics calculations
 
-  // Step the physics world forward
-  physicsWorld.step(1/60, deltaTime, 3);
+  // Step the physics world forward with fixed timestep
+  physicsWorld.step(physicsWorld.fixedTimeStep);
   
   // Update the boat
   if (boat) {
     boat.update();
+    
+    // Get boat position and water height for visualization
+    const boatPos = boat.body.position;
+    const waterHeight = waveUtils.getWaveHeight(boatPos.x, boatPos.z);
+    
+    // Check if the boat is in water (bottom of boat below water level)
+    const boatBottomY = boatPos.y - boat.hullHeight / 2;
+    const isInWater = boatBottomY <= waterHeight;
+    
+    // Update water level marker and buoyancy indicator
+    if (waterLevelMarker) {
+      // Position marker at water surface below boat
+      waterLevelMarker.position.set(boatPos.x, waterHeight, boatPos.z);
+      
+      // Make marker red when boat is not in water, green when in water
+      if (waterLevelMarker.material) {
+        waterLevelMarker.material.color.set(isInWater ? 0x00ff00 : 0xff0000);
+      }
+    }
+    
+    if (buoyancyIndicator) {
+      // Only show indicator when boat is in water
+      buoyancyIndicator.visible = isInWater;
+      
+      if (isInWater) {
+        // Position at intersection of boat and water
+        const indicatorY = Math.min(boatPos.y, waterHeight);
+        buoyancyIndicator.position.set(boatPos.x, indicatorY, boatPos.z);
+        
+        // Size indicator based on submersion
+        const submergence = Math.min(1, (waterHeight - boatBottomY) / boat.hullHeight);
+        const scaleSize = 0.5 + submergence;
+        buoyancyIndicator.scale.set(scaleSize, scaleSize, scaleSize);
+      }
+    }
+    
+    // Periodic logging of physics state
+    if (Math.floor(elapsedTime) % 3 === 0 && Math.floor(elapsedTime) !== lastLogTime) {
+      lastLogTime = Math.floor(elapsedTime);
+      
+      // === START DEBUG LOGGING ===
+      // Check if the boat body still has the preStep listener attached
+      const hasListener = boat.body ? boat.body.hasEventListener('preStep') : 'N/A';
+      // === END DEBUG LOGGING ===
+            
+      console.log(`Physics state at t=${elapsedTime.toFixed(1)}:`, {
+        boatY: boatPos.y.toFixed(2),
+        waterY: waterHeight.toFixed(2),
+        velocity: {
+          y: boat.body.velocity.y.toFixed(2),
+          mag: boat.body.velocity.length().toFixed(2)
+        },
+        inWater: isInWater,
+        submergence: isInWater ? ((waterHeight - boatBottomY) / boat.hullHeight).toFixed(2) : 0,
+        // === START DEBUG LOGGING ===
+        preStepListenerActive: hasListener 
+        // === END DEBUG LOGGING ===
+      });
+    }
   }
 
   // Update the sky with current time of day
@@ -264,7 +482,8 @@ setupUI({
   sky,
   timeOfDay,
   worldConfig,
-  boat // Pass the boat to UI for controls
+  boat, // Pass the boat to UI for controls
+  waveUtils // Pass waveUtils for water height calculations
 });
 
 // Initialize fog with normal settings
@@ -272,5 +491,15 @@ if (scene.fog) {
   scene.fog.density = 0.01; // Set to normal fog density
   console.log("Initialized with normal fog density: 0.01");
 }
+
+// Function to test water height at a specific position
+function testWaterHeight(x, z) {
+  const height = waveUtils.getWaveHeight(x, z);
+  console.log(`Water height at (${x}, ${z}): ${height}`);
+  return height;
+}
+
+// Test water height at origin
+testWaterHeight(0, 0);
 
 animate();

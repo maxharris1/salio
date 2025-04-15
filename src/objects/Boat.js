@@ -19,6 +19,9 @@ export class Boat {
     // Group to hold all boat meshes
     this.boatGroup = new THREE.Group();
     
+    // Controls state
+    this.currentThrust = 0; // Added for thrust control
+    
     // Materials
     this.woodMaterial = new THREE.MeshStandardMaterial({ 
       color: 0x8B4513, 
@@ -515,9 +518,27 @@ export class Boat {
     this.body = new CANNON.Body({
       mass: this.mass,
       shape: boxShape,
-      linearDamping: 0.7,  // Water resistance
-      angularDamping: 0.9, // Rotational resistance
-      position: new CANNON.Vec3(0, 3, 0) // Start position above water
+      material: new CANNON.Material('boatMaterial'),
+      linearDamping: 0.2,  // Reduced from 0.7 for more noticeable movement
+      angularDamping: 0.5, // Reduced from 0.9 for more noticeable rotation
+      position: new CANNON.Vec3(0, 3, 0), // Start position above water
+      collisionFilterGroup: 1, // Ensure collision detection is enabled
+      collisionFilterMask: 1   // Ensure collision detection is enabled
+    });
+    
+    // Enable collision response
+    this.body.collisionResponse = true;
+    
+    // Log physics body creation
+    console.log('Physics body created:', {
+      mass: this.mass,
+      dimensions: {
+        width: this.hullWidth,
+        height: this.hullHeight,
+        length: this.hullLength
+      },
+      position: this.body.position,
+      collisionEnabled: this.body.collisionResponse
     });
     
     // Add to physics world
@@ -533,59 +554,25 @@ export class Boat {
   setupBuoyancy() {
     const gravityMagnitude = Math.abs(this.world.gravity.y);
     
-    // Add preStep event to calculate buoyancy each physics step
-    this.body.addEventListener('preStep', () => {
-      const bodyPos = this.body.position;
-      const bodyQuat = this.body.quaternion;
-      
-      // Get water height at boat position
-      const waterLevel = this.getWaveHeight(bodyPos.x, bodyPos.z);
-      
-      // Calculate bottom center of boat in world space
-      const localBottomCenter = new CANNON.Vec3(0, -this.hullHeight / 2, 0);
-      const worldBottomPoint = bodyQuat.vmult(localBottomCenter).vadd(bodyPos);
-      
-      // Calculate submerged depth
-      const submergedDepth = Math.max(0, waterLevel - worldBottomPoint.y);
-      
-      if (submergedDepth > 0) {
-        // Calculate submerged volume (simplified as box)
-        const maxDepth = this.hullHeight;
-        const actualDepth = Math.min(submergedDepth, maxDepth);
-        const submergedVolume = this.hullWidth * this.hullLength * actualDepth;
-        
-        // Calculate buoyancy force
-        const buoyancyMagnitude = submergedVolume * this.waterDensity * gravityMagnitude;
-        const buoyancyForce = new CANNON.Vec3(0, buoyancyMagnitude, 0);
-        
-        // Apply force at center of buoyancy
-        const localBuoyancyOffset = new CANNON.Vec3(
-          0, 
-          -this.hullHeight / 2 + actualDepth / 2, 
-          0
-        );
-        const worldBuoyancyOffset = bodyQuat.vmult(localBuoyancyOffset);
-        
-        this.body.applyForce(buoyancyForce, worldBuoyancyOffset);
-        
-        // Additional water resistance (damping proportional to submersion)
-        const dampingFactor = 0.01 * submergedVolume;
-        const linearDampingForce = this.body.velocity.scale(-dampingFactor * 30);
-        const angularDampingTorque = this.body.angularVelocity.scale(-dampingFactor * 50);
-        
-        this.body.applyForce(linearDampingForce, new CANNON.Vec3());
-        this.body.applyTorque(angularDampingTorque);
-        
-        // Apply rudder steering force if boat is moving
-        if (this.rudderAngle !== 0 && this.body.velocity.length() > 0.1) {
-          this.applyRudderForce();
-        }
-      } else {
-        // Apply minimal air resistance when out of water
-        this.body.applyForce(this.body.velocity.scale(-5), new CANNON.Vec3());
-        this.body.applyTorque(this.body.angularVelocity.scale(-5));
+    console.log('Initializing buoyancy system:', {
+      mass: this.mass,
+      waterDensity: this.waterDensity,
+      gravityMagnitude,
+      dimensions: {
+        width: this.hullWidth,
+        height: this.hullHeight,
+        length: this.hullLength
       }
     });
+    
+    // --- Buoyancy logic will be moved to the world preStep event in main.js ---
+    // this.body.preStep = () => { ... }; // Remove or comment out this block
+
+    // === START DEBUG LOGGING ===
+    // Log confirmation that preStep is NOT assigned here anymore
+    const listenerAssigned = typeof this.body.preStep === 'function';
+    console.log(`Boat body.preStep function assigned here: ${listenerAssigned}`); // Should be false now
+    // === END DEBUG LOGGING ===
   }
   
   /**
@@ -602,7 +589,7 @@ export class Boat {
     
     // Calculate steering force based on rudder angle
     // Use sine of rudder angle to get perpendicular component
-    const steeringForceMagnitude = speed * speed * 20 * Math.sin(this.rudderAngle);
+    const steeringForceMagnitude = speed * speed * 160 * Math.sin(this.rudderAngle);
     
     // Get boat's right direction
     const right = new CANNON.Vec3(1, 0, 0);
@@ -705,10 +692,50 @@ export class Boat {
    * Apply a force to the boat
    */
   applyForce(force, worldPoint) {
-    this.body.applyForce(
-      new CANNON.Vec3(force.x, force.y, force.z),
-      worldPoint ? new CANNON.Vec3(worldPoint.x, worldPoint.y, worldPoint.z) : new CANNON.Vec3()
-    );
+    // Make sure body exists
+    if (!this.body) {
+      console.error('Cannot apply force: physics body not initialized!');
+      return;
+    }
+    
+    // Convert THREE.Vector3 to CANNON.Vec3 if needed
+    let cannonForce;
+    if (force.isVector3) {
+      cannonForce = new CANNON.Vec3(force.x, force.y, force.z);
+    } else {
+      cannonForce = force;
+    }
+    
+    // Make sure worldPoint is valid
+    let cannonPoint = new CANNON.Vec3();
+    if (worldPoint) {
+      if (worldPoint.isVector3) {
+        cannonPoint = new CANNON.Vec3(worldPoint.x, worldPoint.y, worldPoint.z);
+      } else {
+        cannonPoint = worldPoint;
+      }
+    }
+    
+    // Debug log when force is significant
+    if (cannonForce.length() > 100) {
+      console.log('Applying significant force:', {
+        force: {
+          x: cannonForce.x.toFixed(2),
+          y: cannonForce.y.toFixed(2),
+          z: cannonForce.z.toFixed(2),
+          magnitude: cannonForce.length().toFixed(2)
+        },
+        at: worldPoint ? 'offset point' : 'center',
+        position: {
+          x: this.body.position.x.toFixed(2),
+          y: this.body.position.y.toFixed(2),
+          z: this.body.position.z.toFixed(2)
+        }
+      });
+    }
+    
+    // Apply the force to the physics body
+    this.body.applyForce(cannonForce, cannonPoint);
   }
   
   /**

@@ -1,11 +1,11 @@
 import { Pane } from 'tweakpane';
 import * as THREE from 'three';
 
-export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConfig, boat }) {
+export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConfig, boat, waveUtils }) {
   const pane = new Pane();
 
   // Time of day folder
-  const timeFolder = pane.addFolder({ title: 'Time & Sky' });
+  const timeFolder = pane.addFolder({ title: 'Time & Sky', expanded: false });
   
   timeFolder.addBinding(timeOfDay, 'value', {
     min: 0, max: 1, step: 0.01, label: 'Time of Day'
@@ -14,7 +14,7 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
     sky.sky.material.uniforms.uDayTime.value = value;
   });
   
-  const skyFolder = timeFolder.addFolder({ title: 'Sky Settings' });
+  const skyFolder = timeFolder.addFolder({ title: 'Sky Settings', expanded: false });
   
   skyFolder.addBinding(sky.sky.material.uniforms.uTopExponent, 'value', {
     min: 0.1, max: 1.0, step: 0.01, label: 'Sky Gradient'
@@ -30,7 +30,7 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
 
   // Boat controls folder
   if (boat) {
-    const boatFolder = pane.addFolder({ title: 'Boat Controls' });
+    const boatFolder = pane.addFolder({ title: 'Boat Controls', expanded: false });
     
     // Steering/Rudder control
     const steeringParams = { rudderAngle: 0 };
@@ -55,6 +55,17 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
     }).on('change', ({ value }) => {
       boat.setSailHeight(value); // This also rotates the sail winch
     });
+    
+    // *** NEW: Thrust control ***
+    const thrustParams = { thrust: 0 };
+    boatFolder.addBinding(thrustParams, 'thrust', {
+      min: 0, max: 10000, step: 100, label: 'Thrust' // Increased max thrust
+    }).on('change', ({ value }) => {
+      if (boat) {
+        boat.currentThrust = value; // Assuming boat has this property
+      }
+    });
+    // **************************
     
     // Position controls
     const positionParams = { 
@@ -99,10 +110,48 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
       // Apply a force in the -z direction (simulate wind)
       boat.applyForce(new THREE.Vector3(0, 0, -1000));
     });
+    
+    // Add additional physics testing buttons
+    const physicsTestFolder = boatFolder.addFolder({ title: 'Physics Tests', expanded: false });
+    
+    // Apply upward force (jump)
+    physicsTestFolder.addButton({ title: 'Apply Upward Force' }).on('click', () => {
+      // Increased from 2000 to 10000 for more dramatic effect
+      boat.applyForce(new THREE.Vector3(0, 10000, 0));
+    });
+    
+    // Apply forward force
+    physicsTestFolder.addButton({ title: 'Apply Forward Force' }).on('click', () => {
+      // Increased from 1000 to 5000 for more noticeable movement
+      boat.applyForce(new THREE.Vector3(0, 0, 5000));
+    });
+    
+    // Apply turning force
+    physicsTestFolder.addButton({ title: 'Apply Turning Force' }).on('click', () => {
+      // Apply force at the side to create rotation - increased from 500 to 2500
+      boat.applyForce(
+        new THREE.Vector3(2500, 0, 0),
+        new THREE.Vector3(0, 0, boat.hullLength / 2)
+      );
+    });
+    
+    // Drop boat from height
+    physicsTestFolder.addButton({ title: 'Drop from Height' }).on('click', () => {
+      // Get current position's water height
+      let waterHeight = 0;
+      if (waveUtils && typeof waveUtils.getWaveHeight === 'function') {
+        waterHeight = waveUtils.getWaveHeight(boat.body.position.x, boat.body.position.z);
+      }
+      // Position boat above water level
+      boat.setPosition(boat.body.position.x, waterHeight + 8, boat.body.position.z);
+      boat.body.velocity.set(0, 0, 0);
+      boat.body.angularVelocity.set(0, 0, 0);
+      console.log('Dropped boat from height:', waterHeight + 8);
+    });
   }
 
   // World settings folder
-  const worldFolder = pane.addFolder({ title: 'World' });
+  const worldFolder = pane.addFolder({ title: 'World', expanded: false });
   
   // Add fog control
   if (worldManager.scene.fog) {
@@ -181,10 +230,10 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
   });
 
   // Water parameters folder
-  const waterFolder = pane.addFolder({ title: 'Water' });
+  const waterFolder = pane.addFolder({ title: 'Water', expanded: false });
 
   // Waves
-  const wavesFolder = waterFolder.addFolder({ title: 'Waves' });
+  const wavesFolder = waterFolder.addFolder({ title: 'Waves', expanded: false });
   wavesFolder.addBinding(waterMaterial.uniforms.uWavesAmplitude, 'value', {
     min: 0, max: 0.1, label: 'Amplitude'
   });
@@ -205,7 +254,7 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
   });
 
   // Color
-  const colorFolder = waterFolder.addFolder({ title: 'Color' });
+  const colorFolder = waterFolder.addFolder({ title: 'Color', expanded: false });
 
   colorFolder.addBinding(waterMaterial.uniforms.uOpacity, 'value', {
     min: 0, max: 1, step: 0.01, label: 'Opacity'
@@ -244,7 +293,7 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
   });
 
   // Fresnel
-  const fresnelFolder = waterFolder.addFolder({ title: 'Fresnel' });
+  const fresnelFolder = waterFolder.addFolder({ title: 'Fresnel', expanded: false });
   fresnelFolder.addBinding(waterMaterial.uniforms.uFresnelScale, 'value', {
     min: 0,
     max: 1,
@@ -261,7 +310,7 @@ export function setupUI({ waterMaterial, worldManager, sky, timeOfDay, worldConf
   // If/when caustics are reimplemented with chunking, they can be added back
   
   // You might add a button to help debugging/visualizing chunks
-  const debugFolder = pane.addFolder({ title: 'Debug' });
+  const debugFolder = pane.addFolder({ title: 'Debug', expanded: false });
   
   const debugParams = { showChunkBorders: false };
   debugFolder.addBinding(debugParams, 'showChunkBorders').on('change', ({ value }) => {
